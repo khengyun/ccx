@@ -1,0 +1,4 @@
+# thư mục account cục bộ, không bao giờ commit
+.claude-accounts/
+*.tsv
+oauth_token

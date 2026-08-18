@@ -1,0 +1,537 @@
+#!/usr/bin/env bash
+# ccx — quản lí nhiều tài khoản Claude Code trên cùng một máy Linux.
+#
+# Nguyên lí: mỗi account là một thư mục cấu hình riêng (CLAUDE_CONFIG_DIR) nằm
+# dưới ~/.claude-accounts/<tên>/. Nhờ vậy credentials, lịch sử hội thoại,
+# settings.json và MCP của từng account tách biệt hoàn toàn — đăng nhập sẵn cả
+# ba account, không cần /logout - /login, và chạy song song nhiều terminal.
+#
+# CÁCH DÙNG
+#   ccx add <tên>            tạo account mới rồi mở Claude Code để gõ /login
+#   ccx ls                   bảng trạng thái mọi account (mặc định khi không có tham số)
+#   ccx use <tên> [args…]    chạy Claude Code bằng account đó
+#   ccx next [args…]         tự chọn account rảnh lâu chưa dùng nhất rồi chạy
+#   ccx sh <tên>             mở shell con đã export sẵn biến môi trường
+#   ccx env <tên>            in các dòng export để eval
+#   ccx limit <tên> [giờ]    đánh dấu đã chạm limit (mặc định 5 giờ)
+#   ccx clear <tên>          xoá cooldown
+#   ccx usage <tên>          mở Claude Code kèm nhắc gõ /usage
+#   ccx login <tên>          đăng nhập lại account
+#   ccx token <tên>          dán OAuth token dài hạn (từ `claude setup-token`)
+#   ccx rm <tên>             xoá account (phải gõ lại tên để xác nhận)
+#   ccx shellinit            in đoạn alias để thêm vào ~/.bashrc
+#   ccx --help               in phần chú thích này
+#
+# BIẾN MÔI TRƯỜNG
+#   CCX_HOME        thư mục gốc chứa account   (mặc định ~/.claude-accounts)
+#   CCX_CLAUDE_BIN  lệnh Claude Code           (mặc định claude)
+#
+# SỔ GHI
+#   $CCX_HOME/ledger.tsv — mỗi dòng 3 cột cách nhau bằng TAB:
+#   <tên account>	<epoch lần dùng cuối>	<epoch hết cooldown>
+
+set -euo pipefail
+
+CCX_HOME=${CCX_HOME:-"$HOME/.claude-accounts"}
+CCX_CLAUDE_BIN=${CCX_CLAUDE_BIN:-claude}
+LEDGER="$CCX_HOME/ledger.tsv"
+DEFAULT_COOLDOWN_HOURS=5
+
+# ---------------------------------------------------------------- màu sắc ---
+if [ -t 1 ]; then
+    C_RESET=$'\033[0m'
+    C_BOLD=$'\033[1m'
+    C_DIM=$'\033[2m'
+    C_RED=$'\033[31m'
+    C_GREEN=$'\033[32m'
+    C_YELLOW=$'\033[33m'
+    C_CYAN=$'\033[36m'
+else
+    C_RESET='' C_BOLD='' C_DIM='' C_RED='' C_GREEN='' C_YELLOW='' C_CYAN=''
+fi
+
+# ------------------------------------------------------------- tiện ích ----
+die() {
+    printf '%sLỗi:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2
+    exit 1
+}
+
+info() {
+    printf '%s%s%s\n' "$C_DIM" "$*" "$C_RESET" >&2
+}
+
+now_epoch() {
+    date +%s
+}
+
+ccx_init() {
+    if [ ! -d "$CCX_HOME" ]; then
+        mkdir -p "$CCX_HOME"
+        chmod 700 "$CCX_HOME"
+    fi
+    if [ ! -f "$LEDGER" ]; then
+        : > "$LEDGER"
+        chmod 600 "$LEDGER"
+    fi
+}
+
+check_name() {
+    local name=${1:-}
+    if [ -z "$name" ]; then
+        die "thiếu tên account. Xem 'ccx --help'."
+    fi
+    case $name in
+        *[!a-zA-Z0-9_-]*)
+            die "tên account '$name' không hợp lệ — chỉ cho phép chữ, số, '-' và '_'."
+            ;;
+    esac
+}
+
+account_dir() {
+    printf '%s/%s' "$CCX_HOME" "$1"
+}
+
+require_account() {
+    local name=$1 dir
+    check_name "$name"
+    dir=$(account_dir "$name")
+    if [ ! -d "$dir" ]; then
+        die "không có account '$name'. Chạy 'ccx ls' để xem danh sách, 'ccx add $name' để tạo mới."
+    fi
+}
+
+list_accounts() {
+    local d
+    ccx_init
+    for d in "$CCX_HOME"/*/; do
+        if [ ! -d "$d" ]; then
+            continue
+        fi
+        d=${d%/}
+        printf '%s\n' "${d##*/}"
+    done
+}
+
+require_claude_bin() {
+    if ! command -v "$CCX_CLAUDE_BIN" >/dev/null 2>&1; then
+        die "không tìm thấy lệnh '$CCX_CLAUDE_BIN'. Cài Claude Code hoặc đặt biến CCX_CLAUDE_BIN."
+    fi
+}
+
+# --------------------------------------------------------------- sổ ghi ----
+# In ra "<lần dùng cuối> <hết cooldown>", mặc định "0 0" nếu chưa có/hỏng.
+ledger_read() {
+    local name=$1 last='' cool=''
+    ccx_init
+    IFS=$'\t' read -r last cool < <(
+        awk -F'\t' -v n="$name" '$1 == n { print $2 "\t" $3; exit }' "$LEDGER"
+    ) || true
+    case ${last:-} in ''|*[!0-9]*) last=0 ;; esac
+    case ${cool:-} in ''|*[!0-9]*) cool=0 ;; esac
+    printf '%s %s\n' "$last" "$cool"
+}
+
+ledger_write() {
+    local name=$1 last=$2 cool=$3 tmp
+    ccx_init
+    tmp=$(mktemp "${LEDGER}.XXXXXX")
+    chmod 600 "$tmp"
+    awk -F'\t' -v n="$name" '$1 != n && NF > 0 { print }' "$LEDGER" > "$tmp"
+    printf '%s\t%s\t%s\n' "$name" "$last" "$cool" >> "$tmp"
+    mv "$tmp" "$LEDGER"
+}
+
+ledger_drop() {
+    local name=$1 tmp
+    ccx_init
+    tmp=$(mktemp "${LEDGER}.XXXXXX")
+    chmod 600 "$tmp"
+    awk -F'\t' -v n="$name" '$1 != n && NF > 0 { print }' "$LEDGER" > "$tmp"
+    mv "$tmp" "$LEDGER"
+}
+
+touch_last_used() {
+    local name=$1 last cool
+    read -r last cool <<< "$(ledger_read "$name")"
+    ledger_write "$name" "$(now_epoch)" "$cool"
+}
+
+# ------------------------------------------------------- đọc JSON / thời gian
+# json_get <file> <a.b.c> — lỗi thì in chuỗi rỗng, không bao giờ làm script chết.
+json_get() {
+    local file=$1 path=$2
+    if [ ! -f "$file" ]; then
+        return 0
+    fi
+    python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        cur = json.load(fh)
+    for key in sys.argv[2].split("."):
+        cur = cur[key]
+    if isinstance(cur, (str, int, float)):
+        print(str(cur).replace("\t", " ").strip())
+except Exception:
+    pass
+' "$file" "$path" 2>/dev/null || true
+}
+
+# Thời gian tương đối: "chưa dùng", "vừa xong", "12p trước", "3h trước", "2 ngày trước"
+rel_time() {
+    local ts=$1 now diff
+    if [ "$ts" -le 0 ] 2>/dev/null; then
+        printf 'chưa dùng'
+        return 0
+    fi
+    now=$(now_epoch)
+    diff=$(( now - ts ))
+    if [ "$diff" -lt 0 ]; then
+        diff=0
+    fi
+    if [ "$diff" -lt 60 ]; then
+        printf 'vừa xong'
+    elif [ "$diff" -lt 3600 ]; then
+        printf '%dp trước' "$(( diff / 60 ))"
+    elif [ "$diff" -lt 86400 ]; then
+        printf '%dh trước' "$(( diff / 3600 ))"
+    else
+        printf '%d ngày trước' "$(( diff / 86400 ))"
+    fi
+}
+
+# Khoảng thời gian còn lại: "2h15p" hoặc "45p"
+fmt_remain() {
+    local secs=$1 h m
+    if [ "$secs" -lt 0 ]; then
+        secs=0
+    fi
+    h=$(( secs / 3600 ))
+    m=$(( (secs % 3600) / 60 ))
+    if [ "$h" -gt 0 ]; then
+        printf '%dh%02dp' "$h" "$m"
+    elif [ "$m" -gt 0 ]; then
+        printf '%dp' "$m"
+    else
+        printf '<1p'
+    fi
+}
+
+# Đệm chuỗi cho đủ bề rộng (đếm theo kí tự để chữ có dấu không lệch cột).
+pad() {
+    local s=$1 width=$2 len
+    len=${#s}
+    printf '%s' "$s"
+    while [ "$len" -lt "$width" ]; do
+        printf ' '
+        len=$(( len + 1 ))
+    done
+}
+
+# ----------------------------------------------------------- chạy account --
+# Xuất biến môi trường của account ra environment hiện tại.
+export_account_env() {
+    local name=$1 dir token
+    dir=$(account_dir "$name")
+    export CLAUDE_CONFIG_DIR="$dir"
+    export CCX_ACCOUNT="$name"
+    if [ -f "$dir/oauth_token" ]; then
+        token=$(tr -d ' \t\r\n' < "$dir/oauth_token")
+        if [ -n "$token" ]; then
+            export CLAUDE_CODE_OAUTH_TOKEN="$token"
+        fi
+    fi
+}
+
+exec_claude() {
+    local name=$1
+    shift
+    require_claude_bin
+    export_account_env "$name"
+    exec "$CCX_CLAUDE_BIN" "$@"
+}
+
+# ------------------------------------------------------------ các lệnh -----
+cmd_help() {
+    local src=${BASH_SOURCE[0]}
+    if [ -f "$src" ]; then
+        sed -n '2,/^[^#]/p' "$src" | sed -e '/^[^#]/d' -e 's/^#//' -e 's/^ //'
+    else
+        printf 'ccx — quản lí nhiều tài khoản Claude Code. Xem mã nguồn để biết chi tiết.\n'
+    fi
+}
+
+cmd_add() {
+    local name=${1:-} dir
+    check_name "$name"
+    dir=$(account_dir "$name")
+    if [ -d "$dir" ]; then
+        die "account '$name' đã tồn tại tại $dir."
+    fi
+    ccx_init
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+    ledger_write "$name" 0 0
+    printf '%sĐã tạo account%s %s%s%s → %s\n' \
+        "$C_GREEN" "$C_RESET" "$C_BOLD" "$name" "$C_RESET" "$dir"
+    info "Đang mở Claude Code với CLAUDE_CONFIG_DIR=$dir"
+    info "Trong Claude Code, gõ /login để đăng nhập tài khoản này, xong thì /exit."
+    exec_claude "$name"
+}
+
+cmd_ls() {
+    local -a names=() emails=() plans=() lasts=() states=() colors=()
+    local name last cool dir email plan state color now
+    local w_name=3 w_email=5 w_plan=3 w_last=13
+    now=$(now_epoch)
+
+    while read -r name; do
+        read -r last cool <<< "$(ledger_read "$name")"
+        dir=$(account_dir "$name")
+        email=$(json_get "$dir/.claude.json" 'oauthAccount.emailAddress')
+        plan=$(json_get "$dir/.credentials.json" 'claudeAiOauth.subscriptionType')
+        if [ -z "$email" ]; then
+            email='-'
+        fi
+        if [ -z "$plan" ]; then
+            plan='-'
+        fi
+        if [ "$cool" -gt "$now" ]; then
+            state="đã chạm limit, còn $(fmt_remain "$(( cool - now ))")"
+            color=$C_RED
+        else
+            state='sẵn sàng'
+            color=$C_GREEN
+        fi
+        names+=("$name")
+        emails+=("$email")
+        plans+=("$plan")
+        lasts+=("$(rel_time "$last")")
+        states+=("$state")
+        colors+=("$color")
+        if [ ${#name} -gt "$w_name" ]; then w_name=${#name}; fi
+        if [ ${#email} -gt "$w_email" ]; then w_email=${#email}; fi
+        if [ ${#plan} -gt "$w_plan" ]; then w_plan=${#plan}; fi
+    done < <(list_accounts)
+
+    if [ ${#names[@]} -eq 0 ]; then
+        printf 'Chưa có account nào trong %s\n' "$CCX_HOME"
+        printf 'Tạo account đầu tiên: %sccx add main%s\n' "$C_BOLD" "$C_RESET"
+        return 0
+    fi
+
+    printf '%s' "$C_BOLD"
+    pad 'TÊN' "$w_name"; printf '  '
+    pad 'EMAIL' "$w_email"; printf '  '
+    pad 'GÓI' "$w_plan"; printf '  '
+    pad 'DÙNG LẦN CUỐI' "$w_last"; printf '  '
+    printf 'TRẠNG THÁI%s\n' "$C_RESET"
+
+    local i
+    for i in "${!names[@]}"; do
+        printf '%s' "$C_CYAN"
+        pad "${names[$i]}" "$w_name"
+        printf '%s  ' "$C_RESET"
+        pad "${emails[$i]}" "$w_email"; printf '  '
+        pad "${plans[$i]}" "$w_plan"; printf '  '
+        pad "${lasts[$i]}" "$w_last"; printf '  '
+        printf '%s%s%s\n' "${colors[$i]}" "${states[$i]}" "$C_RESET"
+    done
+}
+
+cmd_use() {
+    local name=${1:-}
+    require_account "$name"
+    shift
+    touch_last_used "$name"
+    info "→ account: $name"
+    exec_claude "$name" "$@"
+}
+
+# In ra account rảnh có lần dùng cuối cũ nhất (rỗng nếu tất cả đang cooldown).
+pick_next() {
+    local now name last cool best='' best_last=0
+    now=$(now_epoch)
+    while read -r name; do
+        read -r last cool <<< "$(ledger_read "$name")"
+        if [ "$cool" -gt "$now" ]; then
+            continue
+        fi
+        if [ -z "$best" ] || [ "$last" -lt "$best_last" ]; then
+            best=$name
+            best_last=$last
+        fi
+    done < <(list_accounts)
+    printf '%s' "$best"
+}
+
+cmd_next() {
+    local name total
+    total=$(list_accounts | wc -l)
+    if [ "$total" -eq 0 ]; then
+        die "chưa có account nào. Tạo bằng 'ccx add <tên>'."
+    fi
+    name=$(pick_next)
+    if [ -z "$name" ]; then
+        printf '%sTất cả %d account đều đang trong cooldown:%s\n' \
+            "$C_RED" "$total" "$C_RESET" >&2
+        cmd_ls >&2
+        printf 'Chờ hết cooldown, hoặc xoá thủ công bằng %sccx clear <tên>%s.\n' \
+            "$C_BOLD" "$C_RESET" >&2
+        exit 1
+    fi
+    printf '%sChọn account%s %s%s%s\n' "$C_YELLOW" "$C_RESET" "$C_BOLD" "$name" "$C_RESET" >&2
+    touch_last_used "$name"
+    exec_claude "$name" "$@"
+}
+
+cmd_sh() {
+    local name=${1:-} shell
+    require_account "$name"
+    export_account_env "$name"
+    shell=${SHELL:-/bin/bash}
+    info "Shell con cho account '$name' (CLAUDE_CONFIG_DIR=$(account_dir "$name")). Gõ 'exit' để thoát."
+    exec "$shell"
+}
+
+cmd_env() {
+    local name=${1:-} dir token
+    require_account "$name"
+    dir=$(account_dir "$name")
+    printf 'export CLAUDE_CONFIG_DIR=%q\n' "$dir"
+    printf 'export CCX_ACCOUNT=%q\n' "$name"
+    if [ -f "$dir/oauth_token" ]; then
+        token=$(tr -d ' \t\r\n' < "$dir/oauth_token")
+        if [ -n "$token" ]; then
+            printf 'export CLAUDE_CODE_OAUTH_TOKEN=%q\n' "$token"
+        fi
+    fi
+}
+
+cmd_limit() {
+    local name=${1:-} hours=${2:-$DEFAULT_COOLDOWN_HOURS} last cool until
+    require_account "$name"
+    case $hours in
+        ''|*[!0-9.]*|.|*.*.*)
+            die "số giờ '$hours' không hợp lệ — nhập một số, ví dụ: ccx limit $name 5"
+            ;;
+    esac
+    read -r last cool <<< "$(ledger_read "$name")"
+    until=$(awk -v n="$(now_epoch)" -v h="$hours" 'BEGIN { printf "%d", n + h * 3600 }')
+    ledger_write "$name" "$last" "$until"
+    printf '%sĐã đánh dấu%s %s%s%s chạm limit, mở lại sau %s giờ (lúc %s).\n' \
+        "$C_YELLOW" "$C_RESET" "$C_BOLD" "$name" "$C_RESET" \
+        "$hours" "$(date -d "@$until" '+%H:%M %d/%m' 2>/dev/null || printf '%s' "$until")"
+}
+
+cmd_clear() {
+    local name=${1:-} last cool
+    require_account "$name"
+    read -r last cool <<< "$(ledger_read "$name")"
+    ledger_write "$name" "$last" 0
+    printf '%sĐã xoá cooldown của%s %s%s%s.\n' \
+        "$C_GREEN" "$C_RESET" "$C_BOLD" "$name" "$C_RESET"
+}
+
+cmd_usage() {
+    local name=${1:-}
+    require_account "$name"
+    info "Đang mở Claude Code bằng account '$name'."
+    info "Gõ /usage trong Claude Code để xem mức dùng và thời điểm reset."
+    touch_last_used "$name"
+    exec_claude "$name"
+}
+
+cmd_login() {
+    local name=${1:-}
+    require_account "$name"
+    info "Đang mở Claude Code bằng account '$name'."
+    info "Gõ /login để đăng nhập lại, xong thì /exit."
+    exec_claude "$name"
+}
+
+cmd_token() {
+    local name=${1:-} dir token
+    require_account "$name"
+    dir=$(account_dir "$name")
+    printf 'Lấy token bằng lệnh: %sCLAUDE_CONFIG_DIR=%s claude setup-token%s\n' \
+        "$C_BOLD" "$dir" "$C_RESET"
+    printf 'Dán OAuth token cho account %s%s%s (không hiển thị khi gõ): ' \
+        "$C_BOLD" "$name" "$C_RESET"
+    token=''
+    read -r -s token || true
+    printf '\n'
+    token=$(printf '%s' "$token" | tr -d ' \t\r\n')
+    if [ -z "$token" ]; then
+        die "chưa nhận được token nào, không ghi gì cả."
+    fi
+    ( umask 077; printf '%s\n' "$token" > "$dir/oauth_token" )
+    chmod 600 "$dir/oauth_token"
+    printf '%sĐã lưu token%s vào %s (chmod 600).\n' "$C_GREEN" "$C_RESET" "$dir/oauth_token"
+    info "Từ giờ use/next/sh của account này sẽ tự export CLAUDE_CODE_OAUTH_TOKEN."
+}
+
+cmd_rm() {
+    local name=${1:-} dir answer
+    require_account "$name"
+    dir=$(account_dir "$name")
+    printf '%sSắp xoá vĩnh viễn%s %s (credentials + lịch sử hội thoại).\n' \
+        "$C_RED" "$C_RESET" "$dir"
+    printf 'Gõ lại đúng tên account để xác nhận: '
+    answer=''
+    read -r answer || true
+    if [ "$answer" != "$name" ]; then
+        die "tên xác nhận không khớp — không xoá gì cả."
+    fi
+    rm -rf -- "$dir"
+    ledger_drop "$name"
+    printf '%sĐã xoá account%s %s.\n' "$C_GREEN" "$C_RESET" "$name"
+}
+
+cmd_shellinit() {
+    cat <<'EOF'
+# ---- ccx: quản lí nhiều tài khoản Claude Code -------------------------------
+alias cc='ccx next'          # chạy account rảnh lâu chưa dùng nhất
+alias ccl='ccx ls'           # xem bảng trạng thái
+alias ccn='ccx next'
+# Nhảy nhanh sang một account cụ thể: ccu <tên> [args…]
+ccu() { ccx use "$@"; }
+# Nạp biến môi trường của một account vào shell hiện tại: ccenv <tên>
+ccenv() { eval "$(ccx env "$1")" && echo "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"; }
+# ----------------------------------------------------------------------------
+EOF
+}
+
+usage_short() {
+    printf 'Dùng: ccx {add|ls|use|next|sh|env|limit|clear|usage|login|token|rm|shellinit|--help} …\n' >&2
+}
+
+main() {
+    local cmd=${1:-ls}
+    if [ $# -gt 0 ]; then
+        shift
+    fi
+    case $cmd in
+        add)        cmd_add "$@" ;;
+        ls|list)    cmd_ls "$@" ;;
+        use)        cmd_use "$@" ;;
+        next)       cmd_next "$@" ;;
+        sh|shell)   cmd_sh "$@" ;;
+        env)        cmd_env "$@" ;;
+        limit)      cmd_limit "$@" ;;
+        clear)      cmd_clear "$@" ;;
+        usage)      cmd_usage "$@" ;;
+        login)      cmd_login "$@" ;;
+        token)      cmd_token "$@" ;;
+        rm|remove)  cmd_rm "$@" ;;
+        shellinit)  cmd_shellinit "$@" ;;
+        -h|--help|help) cmd_help ;;
+        *)
+            printf '%sLỗi:%s lệnh không hợp lệ: %s\n' "$C_RED" "$C_RESET" "$cmd" >&2
+            usage_short
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
