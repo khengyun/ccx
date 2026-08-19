@@ -1,112 +1,114 @@
-# ccx — khi bạn quá giàu và có quá nhiều tài khoản Claude Code
+# ccx — for when you're too rich and have too many Claude Code accounts
 
-> Một account Claude Max không đủ? Hai cũng chưa đã? Bạn có ba, bốn, năm cái và
-> đang phát mệt vì `/logout` → `/login` mỗi lần dính "5-hour limit reached"?
-> Chúc mừng, bạn là *target audience* của tool này. Chia buồn với ví tiền của bạn.
+> One Claude Max account isn't enough? Two still doesn't cut it? You've got three,
+> four, five of them and you're sick of `/logout` → `/login` every time you hit
+> "5-hour limit reached"? Congratulations, you are the *target audience* of this tool.
+> Our condolences to your wallet.
 
-`ccx` là **một file bash duy nhất**, nhẹ hơn cả cảm giác tội lỗi khi trả tiền cho
-account thứ ba. Không cài gì thêm ngoài `bash`, `awk` và `python3` (chỉ để đọc JSON,
-hứa đấy). Đủ dùng, không màu mè, không framework, không "AI-powered account manager".
+`ccx` is **a single bash file**, lighter than the guilt of paying for a third account.
+Nothing to install beyond `bash`, `awk` and `python3` (only for reading JSON, promise).
+Good enough, no frills, no framework, no "AI-powered account manager".
 
-## Nó làm gì
+## What it does
 
-Claude Code đọc toàn bộ cấu hình từ thư mục trỏ bởi biến `CLAUDE_CONFIG_DIR`.
-`ccx` cho mỗi account một "căn hộ riêng" dưới `~/.claude-accounts/<tên>/`, nên
-credentials, lịch sử hội thoại, `settings.json` và MCP của từng account **tách biệt
-hoàn toàn**, không ai giẫm chân ai:
+Claude Code reads all of its config from the directory pointed to by `CLAUDE_CONFIG_DIR`.
+`ccx` gives every account its own "apartment" under `~/.claude-accounts/<name>/`, so
+credentials, conversation history, `settings.json` and MCP servers are **fully isolated**
+per account — nobody steps on anybody's toes:
 
-- đăng nhập sẵn cả đàn account một lần, từ đó không cần `/logout` → `/login` nữa;
-- mở song song nhiều terminal, mỗi cửa sổ một account, cày như một farm;
-- account này hết hơi thì `ccx next` tự nhảy sang account rảnh lâu nhất — luân phiên
-  công bằng như chia ca trực;
-- mặc định luôn chạy `claude --dangerously-skip-permissions`, vì đã giàu thì việc gì
-  phải bấm "Yes" từng lần (tắt được, xem bên dưới).
+- log into the whole herd once, never `/logout` → `/login` again;
+- run several terminals side by side, one account per window, farm away;
+- when one account runs out of breath, `ccx next` hops to the one that's rested the
+  longest — fair rotation, like a shift roster;
+- always runs `claude --dangerously-skip-permissions` by default, because when you're
+  this rich you shouldn't have to click "Yes" every time (can be turned off, see below).
 
-Kèm theo là một cuốn "sổ chấm công" `~/.claude-accounts/ledger.tsv`, mỗi dòng 3 cột
-cách nhau bằng TAB:
+It also keeps a little "timesheet" at `~/.claude-accounts/ledger.tsv`, one line per
+account, 3 TAB-separated columns:
 
 ```
-<tên account>	<epoch lần dùng cuối>	<epoch hết cooldown>
+<account name>	<epoch of last use>	<epoch when cooldown ends>
 ```
 
-## Cài đặt (30 giây, nhanh hơn thời gian bạn nạp thẻ)
+## Install (30 seconds, faster than topping up your card)
 
 ```bash
 install -Dm755 ccx ~/.local/bin/ccx
 ```
 
-Đảm bảo `~/.local/bin` nằm trong `PATH`, rồi thêm alias cho đỡ mỏi tay:
+Make sure `~/.local/bin` is in your `PATH`, then add the aliases to save your fingers:
 
 ```bash
 ccx shellinit >> ~/.bashrc && source ~/.bashrc
 ```
 
-## Các lệnh
+## Commands
 
-| Lệnh | Việc |
+| Command | What it does |
 | --- | --- |
-| `ccx add <tên>` | tạo "căn hộ" cho account (chmod 700) rồi mở Claude Code để gõ `/login` |
-| `ccx ls` | điểm danh: TÊN / EMAIL / GÓI / DÙNG LẦN CUỐI / TRẠNG THÁI (mặc định khi chạy `ccx` trơn) |
-| `ccx use <tên> [args…]` | chạy Claude Code bằng account đó, tham số truyền thẳng cho `claude` |
-| `ccx next [args…]` | tự chọn account **không** trong cooldown và nghỉ lâu nhất — "ai rảnh thì làm" |
-| `ccx sh <tên>` | mở shell con đã export sẵn `CLAUDE_CONFIG_DIR` và `CCX_ACCOUNT` |
-| `ccx env <tên>` | in các dòng `export` để `eval` |
-| `ccx limit <tên> [giờ]` | đánh dấu "em này hết hơi rồi", mặc định nghỉ 5 giờ |
-| `ccx clear <tên>` | xoá cooldown (khi bạn biết chắc nó đã hồi) |
-| `ccx usage <tên>` | mở Claude Code kèm nhắc gõ `/usage` để xem còn bao nhiêu máu |
-| `ccx login <tên>` | đăng nhập lại |
-| `ccx token <tên>` | dán OAuth token dài hạn (`claude setup-token`), lưu chmod 600 |
-| `ccx rm <tên>` | đuổi account đi, phải gõ lại đúng tên để xác nhận (không có undo, nghiêm túc đấy) |
-| `ccx shellinit` | in đoạn alias để thêm vào `~/.bashrc` |
-| `ccx --help` | in phần chú thích đầu file |
+| `ccx add <name>` | create the account's "apartment" (chmod 700) and open Claude Code so you can `/login` |
+| `ccx ls` | roll call: NAME / EMAIL / PLAN / LAST USED / STATUS (default when you run bare `ccx`) |
+| `ccx use <name> [args…]` | run Claude Code as that account, extra args passed straight to `claude` |
+| `ccx next [args…]` | pick the account that is **not** cooling down and has rested the longest — "whoever's free, go" |
+| `ccx sh <name>` | open a subshell with `CLAUDE_CONFIG_DIR` and `CCX_ACCOUNT` already exported |
+| `ccx env <name>` | print `export` lines for `eval` |
+| `ccx limit <name> [hours]` | mark "this one's out of breath", rests 5 hours by default |
+| `ccx clear <name>` | clear the cooldown (when you know it's recovered) |
+| `ccx usage <name>` | open Claude Code with a reminder to type `/usage` and check how much HP is left |
+| `ccx login <name>` | log in again |
+| `ccx token <name>` | paste a long-lived OAuth token (`claude setup-token`), stored chmod 600 |
+| `ccx rm <name>` | evict the account; you must retype the exact name to confirm (no undo, seriously) |
+| `ccx shellinit` | print the alias snippet for `~/.bashrc` |
+| `ccx --help` | print the header comment of the script |
 
-## Một ngày điển hình của người giàu
+## A typical day in the life of a rich person
 
 ```bash
-ccx add max1        # account thứ nhất, đăng nhập bằng /login
-ccx add max2        # account thứ hai, "để dự phòng"
-ccx add max3        # account thứ ba, thôi khỏi giải thích
+ccx add max1        # first account, log in with /login
+ccx add max2        # second account, "just as a backup"
+ccx add max3        # third account, no explanation needed
 
 ccx ls
-# TÊN   EMAIL                 GÓI  DÙNG LẦN CUỐI  TRẠNG THÁI
-# max1  kang+max1@gmail.com   max  3h trước       sẵn sàng
-# max2  kang+max2@gmail.com   max  30p trước      đã chạm limit, còn 4h12p
-# max3  kang+max3@gmail.com   max  chưa dùng      sẵn sàng
+# NAME  EMAIL                 PLAN LAST USED   STATUS
+# max1  kang+max1@gmail.com   max  3h ago      ready
+# max2  kang+max2@gmail.com   max  30m ago     limit hit, 4h12m left
+# max3  kang+max3@gmail.com   max  never       ready
 
-ccx next                       # tự chọn max3 (nghỉ lâu nhất)
-ccx use max1 --model opus      # chỉ định account, tham số truyền thẳng cho claude
-CCX_DANGER=0 ccx use max1      # hôm nay muốn sống thận trọng: KHÔNG kèm --dangerously-skip-permissions
-ccx limit max1                 # vừa dính "5-hour limit reached" → cho nghỉ 5 giờ, qua max2/max3
+ccx next                       # picks max3 (rested the longest)
+ccx use max1 --model opus      # explicit account, args go straight to claude
+CCX_DANGER=0 ccx use max1      # feeling cautious today: WITHOUT --dangerously-skip-permissions
+ccx limit max1                 # just got "5-hour limit reached" → bench it for 5h, move on to max2/max3
 ```
 
-`ccx sh <tên>` mở một shell con đã có sẵn biến môi trường — tiện khi cần chạy nhiều
-lệnh `claude` liên tiếp bằng cùng một account. (Trong shell đó gõ `claude` thì tự thêm
-cờ nhé, `ccx` không đọc được suy nghĩ của bạn.)
+`ccx sh <name>` opens a subshell with the environment already set — handy when you
+need to run several `claude` commands in a row as the same account. (Inside that shell,
+add the flag yourself when you type `claude`; `ccx` can't read your mind.)
 
-## Token dài hạn (tuỳ chọn, cho người lười mở trình duyệt)
+## Long-lived token (optional, for people too lazy to open a browser)
 
 ```bash
 CLAUDE_CONFIG_DIR=~/.claude-accounts/max1 claude setup-token
-ccx token max1      # dán token vào, lưu ở ~/.claude-accounts/max1/oauth_token (chmod 600)
+ccx token max1      # paste the token, stored at ~/.claude-accounts/max1/oauth_token (chmod 600)
 ```
 
-Khi file `oauth_token` tồn tại, `use` / `next` / `sh` sẽ tự export `CLAUDE_CODE_OAUTH_TOKEN`.
+When `oauth_token` exists, `use` / `next` / `sh` automatically export `CLAUDE_CODE_OAUTH_TOKEN`.
 
-## Biến môi trường
+## Environment variables
 
-| Biến | Mặc định | Ý nghĩa |
+| Variable | Default | Meaning |
 | --- | --- | --- |
-| `CCX_HOME` | `~/.claude-accounts` | thư mục gốc chứa account và `ledger.tsv` |
-| `CCX_CLAUDE_BIN` | `claude` | lệnh Claude Code cần chạy |
-| `CCX_DANGER` | `1` | luôn chạy `claude` với `--dangerously-skip-permissions`; đặt `0` nếu muốn Claude hỏi trước khi làm gì |
+| `CCX_HOME` | `~/.claude-accounts` | root directory holding the accounts and `ledger.tsv` |
+| `CCX_CLAUDE_BIN` | `claude` | the Claude Code command to run |
+| `CCX_DANGER` | `1` | always run `claude` with `--dangerously-skip-permissions`; set to `0` if you'd like Claude to ask before doing things |
 
-## Lưu ý (phần nghiêm túc duy nhất)
+## Notes (the only serious part)
 
-- Script chỉ để quản lí các tài khoản **của chính bạn**. Dùng chung một tài khoản cho
-  nhiều người là vi phạm điều khoản dịch vụ của Anthropic — giàu thì giàu, đừng lách.
-- `--dangerously-skip-permissions` đúng nghĩa đen là *dangerously*: Claude sẽ chạy lệnh,
-  sửa file, xoá file mà không hỏi. Chạy trong thư mục nào thì tự chịu trách nhiệm với
-  thư mục đó. Sợ thì `CCX_DANGER=0`.
-- `ccx limit` là đánh dấu **thủ công** — Claude Code không có API để script tự biết đã
-  chạm limit; cứ thấy "5-hour limit reached" thì gõ `ccx limit <tên>`, coi như bấm thẻ.
-- Đã kiểm tra `bash -n` và `shellcheck -S warning` sạch. Nhẹ và đủ dùng, thế thôi.
+- This script is for managing **your own** accounts. Sharing one account between
+  multiple people violates Anthropic's terms of service — be rich, don't be sneaky.
+- `--dangerously-skip-permissions` is *dangerously* in the literal sense: Claude will run
+  commands, edit files and delete files without asking. Whatever directory you run it in,
+  you own the consequences. Scared? `CCX_DANGER=0`.
+- `ccx limit` is a **manual** mark — Claude Code has no API for a script to detect that
+  you've hit the limit; when you see "5-hour limit reached", type `ccx limit <name>`,
+  think of it as punching the clock.
+- Passes `bash -n` and `shellcheck -S warning` clean. Light and good enough, that's it.
