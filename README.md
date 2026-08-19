@@ -99,7 +99,7 @@ When `oauth_token` exists, `use` / `next` / `sh` automatically export `CLAUDE_CO
 | --- | --- | --- |
 | `CCX_HOME` | `~/.claude-accounts` | root directory holding the accounts and `ledger.tsv` |
 | `CCX_CLAUDE_BIN` | `claude` | the Claude Code command to run |
-| `CCX_DANGER` | `1` | always run `claude` with `--dangerously-skip-permissions`; set to `0` if you'd like Claude to ask before doing things |
+| `CCX_DANGER` | `1` | always-on danger mode: runs `claude` with `--dangerously-skip-permissions` **and** writes `permissions.defaultMode: bypassPermissions` + `skipDangerousModePermissionPrompt: true` into the account's `settings.json`, so you're never asked to confirm again; set to `0` if you'd like Claude to ask before doing things |
 
 ## Notes (the only serious part)
 
@@ -107,7 +107,8 @@ When `oauth_token` exists, `use` / `next` / `sh` automatically export `CLAUDE_CO
   multiple people violates Anthropic's terms of service — be rich, don't be sneaky.
 - `--dangerously-skip-permissions` is *dangerously* in the literal sense: Claude will run
   commands, edit files and delete files without asking. Whatever directory you run it in,
-  you own the consequences. Scared? `CCX_DANGER=0`.
+  you own the consequences. Scared? `CCX_DANGER=0` (and remove the two keys from the
+  account's `settings.json` if you want the confirmation prompt back).
 - `ccx limit` is a **manual** mark — Claude Code has no API for a script to detect that
   you've hit the limit; when you see "5-hour limit reached", type `ccx limit <name>`,
   think of it as punching the clock.

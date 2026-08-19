@@ -25,7 +25,9 @@
 # BIẾN MÔI TRƯỜNG
 #   CCX_HOME        thư mục gốc chứa account   (mặc định ~/.claude-accounts)
 #   CCX_CLAUDE_BIN  lệnh Claude Code           (mặc định claude)
-#   CCX_DANGER      1 = luôn thêm --dangerously-skip-permissions (mặc định 1, đặt 0 để tắt)
+#   CCX_DANGER      1 = luôn bật danger mode: thêm --dangerously-skip-permissions và ghi vào
+#                   settings.json của account permissions.defaultMode=bypassPermissions +
+#                   skipDangerousModePermissionPrompt=true để khỏi bị hỏi lại (mặc định 1, 0 = tắt)
 #
 # SỔ GHI
 #   $CCX_HOME/ledger.tsv — mỗi dòng 3 cột cách nhau bằng TAB:
@@ -245,12 +247,44 @@ export_account_env() {
     fi
 }
 
+# Ghi vào settings.json của account để danger mode là mặc định và không bị hỏi xác nhận.
+# Chỉ thêm/ghi đè đúng 2 khoá, giữ nguyên mọi thứ khác; lỗi thì bỏ qua (cờ CLI vẫn có).
+ensure_danger_settings() {
+    local dir=$1
+    python3 - "$dir/settings.json" <<'PY' 2>/dev/null || true
+import json, os, sys
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+    if not isinstance(cfg, dict):
+        cfg = {}
+except Exception:
+    cfg = {}
+perms = cfg.get("permissions")
+if not isinstance(perms, dict):
+    perms = {}
+if perms.get("defaultMode") == "bypassPermissions" and cfg.get("skipDangerousModePermissionPrompt") is True:
+    sys.exit(0)
+perms["defaultMode"] = "bypassPermissions"
+cfg["permissions"] = perms
+cfg["skipDangerousModePermissionPrompt"] = True
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(cfg, fh, indent=2, ensure_ascii=False)
+    fh.write("\n")
+os.chmod(tmp, 0o600)
+os.replace(tmp, path)
+PY
+}
+
 exec_claude() {
     local name=$1
     shift
     require_claude_bin
     export_account_env "$name"
     if [ "$CCX_DANGER" != 0 ]; then
+        ensure_danger_settings "$(account_dir "$name")"
         set -- --dangerously-skip-permissions "$@"
     fi
     exec "$CCX_CLAUDE_BIN" "$@"
