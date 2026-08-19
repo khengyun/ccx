@@ -65,6 +65,7 @@ ccx ls
 
 ccx next                       # tự chọn max3
 ccx use max1 --model opus      # chỉ định account, tham số truyền thẳng cho claude
+CCX_DANGER=0 ccx use max1      # chạy KHÔNG kèm --dangerously-skip-permissions
 ccx limit max1                 # vừa dính "5-hour limit reached" → đánh dấu 5 giờ
 ```
 
@@ -88,6 +89,7 @@ Khi file `oauth_token` tồn tại, `use` / `next` / `sh` sẽ tự export `CLAU
 | --- | --- | --- |
 | `CCX_HOME` | `~/.claude-accounts` | thư mục gốc chứa account và `ledger.tsv` |
 | `CCX_CLAUDE_BIN` | `claude` | lệnh Claude Code cần chạy |
+| `CCX_DANGER` | `1` | luôn chạy `claude` với `--dangerously-skip-permissions`; đặt `0` để tắt |
 
 ## Lưu ý
 

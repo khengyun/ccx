@@ -25,6 +25,7 @@
 # BIẾN MÔI TRƯỜNG
 #   CCX_HOME        thư mục gốc chứa account   (mặc định ~/.claude-accounts)
 #   CCX_CLAUDE_BIN  lệnh Claude Code           (mặc định claude)
+#   CCX_DANGER      1 = luôn thêm --dangerously-skip-permissions (mặc định 1, đặt 0 để tắt)
 #
 # SỔ GHI
 #   $CCX_HOME/ledger.tsv — mỗi dòng 3 cột cách nhau bằng TAB:
@@ -34,6 +35,7 @@ set -euo pipefail
 
 CCX_HOME=${CCX_HOME:-"$HOME/.claude-accounts"}
 CCX_CLAUDE_BIN=${CCX_CLAUDE_BIN:-claude}
+CCX_DANGER=${CCX_DANGER:-1}
 LEDGER="$CCX_HOME/ledger.tsv"
 DEFAULT_COOLDOWN_HOURS=5
 
@@ -248,6 +250,9 @@ exec_claude() {
     shift
     require_claude_bin
     export_account_env "$name"
+    if [ "$CCX_DANGER" != 0 ]; then
+        set -- --dangerously-skip-permissions "$@"
+    fi
     exec "$CCX_CLAUDE_BIN" "$@"
 }
 
