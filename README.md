@@ -1,115 +1,86 @@
 # ccx — for when you're too rich and have too many Claude Code accounts
 
-> One Claude Max account isn't enough? Two still doesn't cut it? You've got three,
-> four, five of them and you're sick of `/logout` → `/login` every time you hit
-> "5-hour limit reached"? Congratulations, you are the *target audience* of this tool.
-> Our condolences to your wallet.
+> One Claude Max account isn't enough? Sick of `/logout` → `/login` every time you hit
+> "5-hour limit reached"? Congratulations, you are the *target audience*.
 
-`ccx` is **a single bash file**, lighter than the guilt of paying for a third account.
-Nothing to install beyond `bash`, `awk` and `python3` (only for reading JSON, promise).
-Good enough, no frills, no framework, no "AI-powered account manager".
+`ccx` is **a single bash file**. It does one thing: run several Claude Code accounts
+on one machine without them stepping on each other.
 
-## What it does
+## How it works
 
-Claude Code reads all of its config from the directory pointed to by `CLAUDE_CONFIG_DIR`.
-`ccx` gives every account its own "apartment" under `~/.claude-accounts/<name>/`, so
-credentials, conversation history, `settings.json` and MCP servers are **fully isolated**
-per account — nobody steps on anybody's toes:
+Claude Code reads all of its config from `CLAUDE_CONFIG_DIR`. `ccx` gives every account
+its own directory under `~/.claude-accounts/<name>/`, so credentials, history and
+`settings.json` are fully isolated. Log in once per account, run them side by side,
+and when one runs out of breath, `ccx next` hops to the one that's rested the longest.
 
-- log into the whole herd once, never `/logout` → `/login` again;
-- run several terminals side by side, one account per window, farm away;
-- when one account runs out of breath, `ccx next` hops to the one that's rested the
-  longest — fair rotation, like a shift roster;
-- always runs `claude --dangerously-skip-permissions` by default, because when you're
-  this rich you shouldn't have to click "Yes" every time (can be turned off, see below).
-
-It also keeps a little "timesheet" at `~/.claude-accounts/ledger.tsv`, one line per
-account, 3 TAB-separated columns:
+When Claude Code exits, `ccx` prints the session id you just ran and how to resume it:
 
 ```
-<account name>	<epoch of last use>	<epoch when cooldown ends>
+session: 1b4eac0b-48c2-4351-9953-b089498958f2
+resume:  ccx use max1 --resume 1b4eac0b-48c2-4351-9953-b089498958f2
 ```
 
-## Install (30 seconds, faster than topping up your card)
+(Plain `claude --resume` won't find it — it doesn't know which account to look in.)
+
+## Install
 
 ```bash
 install -Dm755 ccx ~/.local/bin/ccx
 ```
 
-Make sure `~/.local/bin` is in your `PATH`, then add the aliases to save your fingers:
+Optional aliases for `~/.bashrc`:
 
 ```bash
-ccx shellinit >> ~/.bashrc && source ~/.bashrc
+alias cc='ccx next'
+alias ccl='ccx ls'
+ccu() { ccx use "$@"; }
+ccenv() { eval "$(ccx env "$1")"; }
 ```
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `ccx add <name>` | create the account's "apartment" (chmod 700) and open Claude Code so you can `/login` |
-| `ccx ls` | roll call: NAME / EMAIL / PLAN / LAST USED / STATUS (default when you run bare `ccx`) |
-| `ccx use <name> [args…]` | run Claude Code as that account, extra args passed straight to `claude` |
-| `ccx next [args…]` | pick the account that is **not** cooling down and has rested the longest — "whoever's free, go" |
-| `ccx sh <name>` | open a subshell with `CLAUDE_CONFIG_DIR` and `CCX_ACCOUNT` already exported |
+| `ccx add <name>` | create the account and open Claude Code so you can `/login` |
+| `ccx ls` | NAME / EMAIL / LAST USED / STATUS (default when you run bare `ccx`) |
+| `ccx use <name> [args…]` | run Claude Code as that account; extra args go straight to `claude` |
+| `ccx next [args…]` | pick the free account that has rested the longest |
+| `ccx limit <name> [hours]` | mark "hit the limit", benched for 5 hours by default |
+| `ccx clear <name>` | clear the cooldown |
 | `ccx env <name>` | print `export` lines for `eval` |
-| `ccx limit <name> [hours]` | mark "this one's out of breath", rests 5 hours by default |
-| `ccx clear <name>` | clear the cooldown (when you know it's recovered) |
-| `ccx usage <name>` | open Claude Code with a reminder to type `/usage` and check how much HP is left |
-| `ccx login <name>` | log in again |
-| `ccx token <name>` | paste a long-lived OAuth token (`claude setup-token`), stored chmod 600 |
-| `ccx rm <name>` | evict the account; you must retype the exact name to confirm (no undo, seriously) |
-| `ccx shellinit` | print the alias snippet for `~/.bashrc` |
-| `ccx --help` | print the header comment of the script |
+| `ccx rm <name>` | delete the account; retype the name to confirm (no undo) |
 
-## A typical day in the life of a rich person
+Need `/usage` or `/login` again? `ccx use <name>` and type it inside Claude Code.
+
+## A typical day
 
 ```bash
-ccx add max1        # first account, log in with /login
-ccx add max2        # second account, "just as a backup"
-ccx add max3        # third account, no explanation needed
-
+ccx add max1                 # log in with /login
+ccx add max2
 ccx ls
-# NAME  EMAIL                 PLAN LAST USED   STATUS
-# max1  kang+max1@gmail.com   max  3h ago      ready
-# max2  kang+max2@gmail.com   max  30m ago     limit hit, 4h12m left
-# max3  kang+max3@gmail.com   max  never       ready
+# TÊN   EMAIL               DÙNG LẦN CUỐI  TRẠNG THÁI
+# max1  kang+1@gmail.com    3h trước       sẵn sàng
+# max2  kang+2@gmail.com    30p trước      limit, còn 4h12p
 
-ccx next                       # picks max3 (rested the longest)
-ccx use max1 --model opus      # explicit account, args go straight to claude
-CCX_DANGER=0 ccx use max1      # feeling cautious today: WITHOUT --dangerously-skip-permissions
-ccx limit max1                 # just got "5-hour limit reached" → bench it for 5h, move on to max2/max3
+ccx next                     # picks max1
+ccx use max2 --model opus    # explicit account
+ccx limit max1               # just saw "5-hour limit reached" → bench it
 ```
-
-`ccx sh <name>` opens a subshell with the environment already set — handy when you
-need to run several `claude` commands in a row as the same account. (Inside that shell,
-add the flag yourself when you type `claude`; `ccx` can't read your mind.)
-
-## Long-lived token (optional, for people too lazy to open a browser)
-
-```bash
-CLAUDE_CONFIG_DIR=~/.claude-accounts/max1 claude setup-token
-ccx token max1      # paste the token, stored at ~/.claude-accounts/max1/oauth_token (chmod 600)
-```
-
-When `oauth_token` exists, `use` / `next` / `sh` automatically export `CLAUDE_CODE_OAUTH_TOKEN`.
 
 ## Environment variables
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `CCX_HOME` | `~/.claude-accounts` | root directory holding the accounts and `ledger.tsv` |
-| `CCX_CLAUDE_BIN` | `claude` | the Claude Code command to run |
-| `CCX_DANGER` | `1` | always-on danger mode: runs `claude` with `--dangerously-skip-permissions` **and** writes `permissions.defaultMode: bypassPermissions` + `skipDangerousModePermissionPrompt: true` into the account's `settings.json`, so you're never asked to confirm again; set to `0` if you'd like Claude to ask before doing things |
+| `CCX_HOME` | `~/.claude-accounts` | where accounts and `ledger.tsv` live |
+| `CCX_CLAUDE_BIN` | `claude` | the Claude Code command |
+| `CCX_DANGER` | `1` | add `--dangerously-skip-permissions`; `0` to have Claude ask first |
 
-## Notes (the only serious part)
+## Notes
 
-- This script is for managing **your own** accounts. Sharing one account between
-  multiple people violates Anthropic's terms of service — be rich, don't be sneaky.
-- `--dangerously-skip-permissions` is *dangerously* in the literal sense: Claude will run
-  commands, edit files and delete files without asking. Whatever directory you run it in,
-  you own the consequences. Scared? `CCX_DANGER=0` (and remove the two keys from the
-  account's `settings.json` if you want the confirmation prompt back).
-- `ccx limit` is a **manual** mark — Claude Code has no API for a script to detect that
-  you've hit the limit; when you see "5-hour limit reached", type `ccx limit <name>`,
-  think of it as punching the clock.
-- Passes `bash -n` and `shellcheck -S warning` clean. Light and good enough, that's it.
+- For **your own** accounts only. Sharing an account between people violates
+  Anthropic's terms — be rich, don't be sneaky.
+- `--dangerously-skip-permissions` means Claude runs commands and edits files without
+  asking. Scared? `CCX_DANGER=0`.
+- `ccx limit` is manual: there's no API to detect the limit, so type it when you see it.
+- `ledger.tsv` is one line per account: `<name>	<last used epoch>	<cooldown end epoch>`.
+- Needs only `bash`, `awk`, `grep`, `column`. Passes `shellcheck` clean.
